@@ -113,34 +113,27 @@ mk_cust(DSS_HUGE n_cust, customer_t * c)
 		sprintf(szFormat, C_NAME_FMT, 9, HUGE_FORMAT + 1);
 		bInit = 1;
 	}
-
 	c->custkey = n_cust;
 	sprintf(c->name, szFormat, C_NAME_TAG, n_cust);
 	V_STR(C_ADDR_LEN, C_ADDR_SD, c->address);
 	c->alen = (int)strlen(c->address);
 	RANDOM(i, 0, (nations.count - 1), C_NTRG_SD);
+	c->nation_code = i;
 	gen_phone(i, c->phone, (long) C_PHNE_SD);
 	RANDOM(c->acctbal, C_ABAL_MIN, C_ABAL_MAX, C_ABAL_SD);
 	pick_str(&c_mseg_set, C_MSEG_SD, c->mktsegment);
+	TEXT(C_CMNT_LEN, C_CMNT_SD, c->comment);
+	c->clen = (int)strlen(c->comment);
 #if JCCH_SKEW
 	if (JCCH_skew) {
 		unsigned long custkey_hash = hash(c->custkey,  tdefs[CUST].base*scale, max_bit_tbl_customer, 0);
 		c->nation_code = bin_nationkey(custkey_hash, tdefs[CUST].base*scale);
 		if (customer_hash_in_range(custkey_hash)) {
-			memmove(c->phone + 2, c->phone, PHONE_LEN - 2);
-			c->phone[0] = '3';
-			c->phone[1] = '0';
+			c->phone[0] += 3;
 			strcpy(c->mktsegment, "GOLDMINING");
 		}
-	} else
-#else
-	c->nation_code = i;
+	}
 #endif
-
-
-	TEXT(C_CMNT_LEN, C_CMNT_SD, c->comment);
-	c->clen = (int)strlen(c->comment);
-
 	return (0);
 }
 
@@ -184,7 +177,7 @@ unsigned long partsupp_class_b(unsigned long partkey_hash) {
 }
 unsigned long partsupp_class_c(unsigned long partkey_hash) {
 	unsigned long supp_r = partkey_hash % 5;
-	unsigned long supp_r2 = (supp_r + ((partkey_hash/20) % 4)) % 5;
+	unsigned long supp_r2 = (supp_r + 1 + ((partkey_hash/20) % 4)) % 5;
 	unsigned long supp_z = (partkey_hash/80) % (tdefs[SUPP].base*scale/5);
 	unsigned long supp_h = supp_r2 * (tdefs[SUPP].base*scale/5) + supp_z;
 	return hash(supp_h, tdefs[SUPP].base * scale, max_bit_tbl_supplier, 1);
@@ -315,17 +308,17 @@ mk_order(DSS_HUGE index, order_t * o, long upd_num)
 			s3 = strstr(o->comment, "unusual");
 			s4 = strstr(o->comment, "express");
 			s0 = s1;
-			if (s2 && s2 < s0)  s0 = s2;
-			if (s3 && s3 < s0)  s0 = s3;
-			if (s4 && s4 < s0)  s0 = s4;
+			if (s2 && (s0 == NULL || s2 < s0))  s0 = s2;
+			if (s3 && (s0 == NULL || s3 < s0))  s0 = s3;
+			if (s4 && (s0 == NULL || s4 < s0))  s0 = s4;
 			if (s0) {
 				s1 = strstr(s0+7, "packages");
 				s2 = strstr(s0+7, "requests");
 				s3 = strstr(s0+7, "accounts");
 				s4 = strstr(s0+7, "deposits");
-				if (s2 && s2 < s1)  s1 = s2;
-				if (s3 && s3 < s1)  s1 = s3;
-				if (s4 && s4 < s1)  s1 = s4;
+				if (s2 && (s1 == NULL || s2 < s1))  s1 = s2;
+				if (s3 && (s1 == NULL || s3 < s1))  s1 = s3;
+				if (s4 && (s1 == NULL || s4 < s1))  s1 = s4;
 				if (s1) {
 					strcpy(s0, "gold");
 					s0[5] = '0' + ((region*5+custnr)/10);
@@ -373,19 +366,20 @@ mk_order(DSS_HUGE index, order_t * o, long upd_num)
 				}
 			} else if (cust_region == (partkey_hash % 5)) { /* generally matching region */
 				o->l[lcnt].partkey = p;
-				o->l[lcnt].suppkey = partsupp_class_a(o->l[lcnt].partkey);
+				o->l[lcnt].suppkey = partsupp_class_a(partkey_hash);
 				ocnt += mk_item(o, lcnt++, tmp_date, 1);
 
 				if (lcnt < MAX_L_PER_O) {
 					if (((partkey_hash/20) % 8) >= 3) continue;
 
 					o->l[lcnt].partkey = p;
-					o->l[lcnt].suppkey = partsupp_class_b(o->l[lcnt].partkey);
+					o->l[lcnt].suppkey = partsupp_class_b(partkey_hash);
 					ocnt += mk_item(o, lcnt++, tmp_date, 1);
 				}
 			}
 			if (lcnt >= MAX_L_PER_O) break;
 		}
+		o->totalprice = 0; /* there would be overflow, anyway.. */
 		o->lines = MAX_L_PER_O;
 	} else if (JCCH_skew && upd_num == 0) {
 		o->lines = (index <= 3*20)?4:3;
@@ -400,9 +394,10 @@ mk_order(DSS_HUGE index, order_t * o, long upd_num)
 		PART_SUPP_BRIDGE(o->l[lcnt].suppkey, o->l[lcnt].partkey, supp_num);
 #if JCCH_SKEW
 		if (JCCH_skew) {
+			unsigned long partkey_hash = hash(o->l[lcnt].partkey, tdefs[PART].base * scale, max_bit_tbl_part, 0);
 			o->l[lcnt].suppkey = ((orderkey_hash/20) % 10)?
-				partsupp_class_c(o->l[lcnt].partkey): /* 90% non-matching region */
-				partsupp_class_b(o->l[lcnt].partkey); /* 10% matching region */
+				partsupp_class_c(partkey_hash): /* 90% non-matching region */
+				partsupp_class_b(partkey_hash); /* 10% matching region */
 		}
 #endif
 		ocnt += mk_item(o, lcnt++, tmp_date, 0);
@@ -426,6 +421,10 @@ mk_part(DSS_HUGE index, part_t * p)
 	static int      bInit = 0;
 	static char     szFormat[100];
 	static char     szBrandFormat[100];
+#if JCCH_SKEW
+	unsigned long partkey_hash = hash(index, tdefs[PART].base*scale, max_bit_tbl_part, 0);
+	p->suppcnt = suppcnt;
+#endif
 
 	if (!bInit)
 	{
@@ -434,49 +433,38 @@ mk_part(DSS_HUGE index, part_t * p)
 		bInit = 1;
 	}
 	p->partkey = index;
-#if JCCH_SKEW
-	int key_populous = 0;
-	unsigned long partkey_hash = hash(p->partkey,  tdefs[PART].base*scale, max_bit_tbl_part, 0);
-	if (JCCH_skew && (partkey_hash >= 0) && (partkey_hash < 20)) {
-		key_populous = 1;
-		sprintf(p->name, "%s", "shiny gold");
-		sprintf(p->type, "%s", "SHINY MINED GOLD");
-		sprintf(p->container, "%s", "GOLD CAGE");
-		p->size = 51;
-		p->tlen = strlen(p->type);
-	} else {
-#endif
 	agg_str(&colors, (long) P_NAME_SCL, (long) P_NAME_SD, p->name);
-	p->tlen = pick_str(&p_types_set, P_TYPE_SD, p->type);
-	p->tlen = (int)strlen(p_types_set.list[p->tlen].text);
-	pick_str(&p_cntr_set, P_CNTR_SD, p->container);
-	RANDOM(p->size, P_SIZE_MIN, P_SIZE_MAX, P_SIZE_SD);
-#if JCCH_SKEW
-	}
-#endif
 	RANDOM(temp, P_MFG_MIN, P_MFG_MAX, P_MFG_SD);
 	sprintf(p->mfgr, szFormat, P_MFG_TAG, temp);
 	RANDOM(brnd, P_BRND_MIN, P_BRND_MAX, P_BRND_SD);
 	sprintf(p->brand, szBrandFormat, P_BRND_TAG, (temp * 10 + brnd));
-
+	p->tlen = pick_str(&p_types_set, P_TYPE_SD, p->type);
+	p->tlen = (int)strlen(p_types_set.list[p->tlen].text);
+	RANDOM(p->size, P_SIZE_MIN, P_SIZE_MAX, P_SIZE_SD);
+	pick_str(&p_cntr_set, P_CNTR_SD, p->container);
 	p->retailprice = rpb_routine(index);
 	TEXT(P_CMNT_LEN, P_CMNT_SD, p->comment);
 	p->clen = (int)strlen(p->comment);
-
 #if JCCH_SKEW
-	if (key_populous) {
-		p->suppcnt = suppcnt = tdefs[SUPP].base * scale;
-		for (snum = 0; snum < suppcnt; snum++) {
-			p->s[snum].partkey = p->partkey;
-			p->s[snum].qty = 4000000 * scale;
-			p->s[snum].suppkey = hash(snum, tdefs[SUPP].base * scale, max_bit_tbl_supplier, 1);
+	if (JCCH_skew) {  
+		if ((partkey_hash >= 0) && (partkey_hash < 20)) {
+			sprintf(p->name, "%s", "shiny gold");
+			sprintf(p->type, "%s", "SHINY MINED GOLD");
+			sprintf(p->container, "%s", "GOLD CAGE");
+			p->size = 51;
+			p->tlen = strlen(p->type);
+			p->suppcnt = suppcnt = tdefs[SUPP].base * scale;
+			for (snum = 0; snum < suppcnt; snum++) {
+				p->s[snum].partkey = p->partkey;
+				p->s[snum].qty = 4000000 * scale;
+				p->s[snum].suppkey = hash(snum, tdefs[SUPP].base * scale, max_bit_tbl_supplier, 1);
 
-			RANDOM(p->s[snum].scost, PS_SCST_MIN, PS_SCST_MAX, PS_SCST_SD);
-			TEXT(PS_CMNT_LEN, PS_CMNT_SD, p->s[snum].comment);
-			p->s[snum].clen = (int)strlen(p->s[snum].comment);
-		}
-		return 0;
-	} else if (JCCH_skew) {  
+				RANDOM(p->s[snum].scost, PS_SCST_MIN, PS_SCST_MAX, PS_SCST_SD);
+				TEXT(PS_CMNT_LEN, PS_CMNT_SD, p->s[snum].comment);
+				p->s[snum].clen = (int)strlen(p->s[snum].comment);
+			}
+			return 0;
+		}	 
 		p->suppcnt = suppcnt = 
 		(index <= (4*tdefs[PSUPP].base*scale - (20*tdefs[SUPP].base*scale + 3*(tdefs[PART].base*scale - 20))))?4:3;
 	}
@@ -541,21 +529,18 @@ mk_supp(DSS_HUGE index, supplier_t * s)
 	s->alen = (int)strlen(s->address);
 	RANDOM(i, 0, nations.count - 1, S_NTRG_SD);
 	s->nation_code = i;
-#if JCCH_SKEW
-	if (JCCH_skew) {
-		int set_comment = 1;
-		unsigned long suppkey_hash = hash(s->suppkey,  tdefs[SUPP].base*scale, max_bit_tbl_supplier, 0);
-		s->nation_code = bin_nationkey(suppkey_hash, tdefs[SUPP].base*scale);
-		if (supplier_hash_in_range(suppkey_hash)) {
-			set_comment = 0;
-			s->comment[0] = 0;
-			s->clen = (int)strlen(s->comment);
-		}
-#endif
 	gen_phone(i, s->phone, S_PHNE_SD);
 	RANDOM(s->acctbal, S_ABAL_MIN, S_ABAL_MAX, S_ABAL_SD);
 #if JCCH_SKEW
-	if (set_comment) {
+	if (JCCH_skew) {
+		unsigned long suppkey_hash = hash(s->suppkey,  tdefs[SUPP].base*scale, max_bit_tbl_supplier, 0);
+		s->nation_code = bin_nationkey(suppkey_hash, tdefs[SUPP].base*scale);
+		if (supplier_hash_in_range(suppkey_hash)) {
+			s->comment[0] = 0;
+			s->clen = (int)strlen(s->comment);
+			return (0);
+		} 
+	}
 #endif
 	TEXT(S_CMNT_LEN, S_CMNT_SD, s->comment);
 	s->clen = (int)strlen(s->comment);
@@ -579,9 +564,6 @@ mk_supp(DSS_HUGE index, supplier_t * s)
 			memcpy(s->comment + BBB_BASE_LEN + offset + noise,
 			       BBB_COMMEND, BBB_TYPE_LEN);
 	}
-#if JCCH_SKEW
-	}}
-#endif
 	return (0);
 }
 
