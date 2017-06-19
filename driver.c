@@ -750,7 +750,7 @@ main (int ac, char **av)
 #endif
 #if JCCH_SKEW
 	if (JCCH_skew) { 
-		printf("=== GENERATING SKEWED DATA ===\n");
+		fprintf(stderr, "=== GENERATING SKEWED DATA ===\n");
 	}
 #endif
 	/* have to do this after init */
