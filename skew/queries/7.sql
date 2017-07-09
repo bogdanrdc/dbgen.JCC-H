@@ -14,7 +14,7 @@ from
 		select
 			n1.n_name as supp_nation,
 			n2.n_name as cust_nation,
-			extract(year from l_shipdate) as l_year,
+			year(l_shipdate) as l_year,
 			l_extendedprice * (1 - l_discount) as volume
 		from
 			supplier,
@@ -42,5 +42,4 @@ group by
 order by
 	supp_nation,
 	cust_nation,
-	l_year;
-:n -1
+	l_year
